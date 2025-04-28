@@ -12,11 +12,15 @@
    - Низкоуровневая работа с моделью Whisper
    - Эффективное управление моделями (кэширование)
    - TCP сервер для взаимодействия с клиентами
+   - Поддержка GPU через CUDA
+   - Voice Activity Detection (VAD) фильтр
 
 2. **Golang Web Service**
    - Веб-интерфейс для конечных пользователей
    - REST API для интеграции с другими системами
    - Эффективный клиент для Python сервиса
+   - Метрики и мониторинг
+   - Поддержка контекста для отмены операций
 
 Микросервисы взаимодействуют по бинарному протоколу через TCP соединение.
 
@@ -50,6 +54,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 4. Установите необходимые библиотеки:
 ```bash
+cd python
 pip install -r requirements.txt
 ```
 
@@ -61,9 +66,8 @@ pip install -r requirements.txt
      - `cudnn64_8.dll`
      - и другие файлы из архива
 
+6. Запустите сервис:
 ```bash
-cd python
-pip install -r requirements.txt
 python whisper_service.py
 ```
 
@@ -74,6 +78,10 @@ WHISPER_HOST=0.0.0.0 WHISPER_PORT=9001 python whisper_service.py
 
 ### Golang сервис
 
+1. Установите Go 1.18 или выше:
+   - [Go Downloads](https://golang.org/dl/)
+
+2. Установите зависимости и запустите сервис:
 ```bash
 cd golang
 go mod download
@@ -103,6 +111,9 @@ WHISPER_HOST=127.0.0.1 WHISPER_PORT=9000 SERVER_PORT=8080 go run main.go whisper
 
 #### GET /api/health
 Проверка статуса сервиса.
+
+#### GET /api/metrics
+Получение метрик сервиса.
 
 ## Протокол взаимодействия микросервисов
 
@@ -149,13 +160,32 @@ WHISPER_HOST=127.0.0.1 WHISPER_PORT=9000 SERVER_PORT=8080 go run main.go whisper
 pip install git+https://github.com/openai/whisper.git
 ```
 
+### Проблемы с CUDA
+
+Если возникают ошибки, связанные с CUDA:
+
+1. Убедитесь, что установлена правильная версия CUDA Toolkit (11.8)
+2. Проверьте, что все необходимые DLL файлы скопированы в System32
+3. Убедитесь, что PyTorch установлен с поддержкой CUDA
+4. Проверьте, что GPU доступен и поддерживает CUDA
+
 ## Оптимизация
 
 Для лучшей производительности:
 1. Используйте GPU, если он доступен
 2. Выберите подходящую модель в зависимости от требований к точности и скорости
 3. Настройте параметры VAD фильтра под ваши нужды
+4. Используйте кэширование моделей
+5. Оптимизируйте размер буфера для аудио данных
 
 ## Лицензия
 
-MIT 
+MIT License - смотрите файл [LICENSE](LICENSE)
+
+## Вклад в проект
+
+Приветствуются pull requests и issue reports. Для крупных изменений, пожалуйста, сначала откройте issue для обсуждения предлагаемых изменений.
+
+## Безопасность
+
+Если вы обнаружили уязвимость безопасности, пожалуйста, отправьте email на security@example.com. Все уязвимости будут оперативно рассмотрены. 
