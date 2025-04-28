@@ -241,28 +241,23 @@
                     resultsDiv.classList.remove('hidden');
                     
                     // Текст
-                    transcriptionDiv.textContent = data.text || 'Текст не распознан';
+                    transcriptionDiv.textContent = data.data.text || 'Текст не распознан';
                     
                     // Информация
-                    detectedLanguageSpan.textContent = data.language || '-';
-                    processingTimeSpan.textContent = data.processing_time ? 
-                        `${data.processing_time.toFixed(2)} сек.` : '-';
+                    detectedLanguageSpan.textContent = data.data.language || '-';
+                    processingTimeSpan.textContent = data.metrics.processing_time || '-';
                     
                     // Сегменты
                     segmentsDiv.innerHTML = '';
-                    if (data.segments && data.segments.length > 0) {
-                        data.segments.forEach(segment => {
-                            const div = document.createElement('div');
-                            div.className = 'segment-item';
-                            
-                            const timeSpan = document.createElement('span');
-                            timeSpan.className = 'time';
-                            timeSpan.textContent = `[${formatTime(segment.start)} → ${formatTime(segment.end)}]`;
-                            
-                            div.appendChild(timeSpan);
-                            div.appendChild(document.createTextNode(segment.text));
-                            
-                            segmentsDiv.appendChild(div);
+                    if (data.data.segments && data.data.segments.length > 0) {
+                        data.data.segments.forEach(segment => {
+                            const segmentDiv = document.createElement('div');
+                            segmentDiv.className = 'segment-item';
+                            segmentDiv.innerHTML = `
+                                <span class="time">${segment.start.toFixed(2)} - ${segment.end.toFixed(2)}</span>
+                                ${segment.text}
+                            `;
+                            segmentsDiv.appendChild(segmentDiv);
                         });
                     } else {
                         segmentsDiv.textContent = 'Нет информации о сегментах';

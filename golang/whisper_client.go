@@ -6,9 +6,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -22,6 +25,7 @@ type WhisperClient struct {
 	conn     net.Conn
 	connLock sync.Mutex
 	metrics  Metrics
+	client   *http.Client
 }
 
 // Metrics - метрики клиента
@@ -82,9 +86,24 @@ type ModelsResponse struct {
 
 // NewWhisperClient создает нового клиента для работы с Whisper сервисом
 func NewWhisperClient(host, port string) *WhisperClient {
+	client := &http.Client{
+		Timeout: 30 * time.Minute,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
 	return &WhisperClient{
-		Host: host,
-		Port: port,
+		Host:   host,
+		Port:   port,
+		client: client,
 	}
 }
 
@@ -216,7 +235,12 @@ func (c *WhisperClient) Transcribe(audioPath string, model string, language *str
 	// Преобразуем путь к абсолютному, чтобы Python сервис мог найти файл
 	absPath, err := filepath.Abs(audioPath)
 	if err != nil {
-		return nil, errors.New("не удалось получить абсолютный путь к файлу: " + err.Error())
+		return nil, fmt.Errorf("не удалось получить абсолютный путь к файлу: %v", err)
+	}
+
+	// Проверяем существование файла
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("файл не существует: %s", absPath)
 	}
 
 	// Проверяем язык
@@ -232,12 +256,70 @@ func (c *WhisperClient) Transcribe(audioPath string, model string, language *str
 		Task:      task,
 	}
 
-	responseData, err := c.sendRequest(request)
+	// Увеличиваем таймаут для больших файлов
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	responseData, err := c.sendRequestWithContext(ctx, request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ошибка при отправке запроса: %v", err)
 	}
 
 	return c.handleResponse(responseData)
+}
+
+// sendRequestWithContext отправляет запрос с поддержкой контекста
+func (c *WhisperClient) sendRequestWithContext(_ context.Context, request interface{}) ([]byte, error) {
+	startTime := time.Now()
+	atomic.AddInt64(&c.metrics.RequestsTotal, 1)
+
+	defer func() {
+		duration := time.Since(startTime)
+		atomic.AddInt64(&c.metrics.ProcessingTimeMs, duration.Milliseconds())
+		c.logRequest("sendRequest", duration, nil)
+	}()
+
+	// Сериализуем запрос в JSON
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при сериализации запроса: %v", err)
+	}
+
+	// Устанавливаем соединение
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(c.Host, c.Port), 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при установке соединения: %v", err)
+	}
+	defer conn.Close()
+
+	// Устанавливаем таймауты
+	conn.SetDeadline(time.Now().Add(30 * time.Minute))
+
+	// Отправляем длину сообщения
+	header := make([]byte, 8)
+	binary.BigEndian.PutUint64(header, uint64(len(requestJSON)))
+	if _, err := conn.Write(header); err != nil {
+		return nil, fmt.Errorf("ошибка при отправке заголовка: %v", err)
+	}
+
+	// Отправляем данные
+	if _, err := conn.Write(requestJSON); err != nil {
+		return nil, fmt.Errorf("ошибка при отправке данных: %v", err)
+	}
+
+	// Читаем ответ
+	headerBuf := make([]byte, 8)
+	if _, err := io.ReadFull(conn, headerBuf); err != nil {
+		return nil, fmt.Errorf("ошибка при чтении заголовка ответа: %v", err)
+	}
+
+	responseLen := binary.BigEndian.Uint64(headerBuf)
+	responseBuf := make([]byte, responseLen)
+	if _, err := io.ReadFull(conn, responseBuf); err != nil {
+		return nil, fmt.Errorf("ошибка при чтении ответа: %v", err)
+	}
+
+	return responseBuf, nil
 }
 
 // TranscribeWithContext выполняет транскрипцию с поддержкой контекста
