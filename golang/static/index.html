@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper - Распознавание речи</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        h1 {
+            color: #3c3c3c;
+            border-bottom: 2px solid #eaeaea;
+            padding-bottom: 10px;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        select, input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        button {
+            background-color: #4a6cf7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #3a5cd7;
+        }
+        button:disabled {
+            background-color: #b4b4b4;
+            cursor: not-allowed;
+        }
+        .result {
+            white-space: pre-wrap;
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 100px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #4a6cf7;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden {
+            display: none;
+        }
+        .info {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .segments {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        .segment-item {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        .segment-item:hover {
+            background-color: #f0f0f0;
+        }
+        .time {
+            color: #888;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Whisper - Распознавание речи</h1>
+    
+    <div class="card">
+        <div class="form-group">
+            <label for="model">Выберите модель:</label>
+            <select id="model">
+                <option value="tiny">Tiny - самая быстрая (~1 ГБ)</option>
+                <option value="base" selected>Base - хороший баланс (~1 ГБ)</option>
+                <option value="small">Small - более точная (~2 ГБ)</option>
+                <option value="medium">Medium - еще более точная (~5 ГБ)</option>
+                <option value="large">Large - самая точная (~10 ГБ)</option>
+            </select>
+            <div class="info">Выбирайте более крупные модели для лучшего качества распознавания</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="language">Язык (оставьте пустым для автоопределения):</label>
+            <select id="language">
+                <option value="">Автоопределение</option>
+                <option value="ru">Русский</option>
+                <option value="en">Английский</option>
+                <option value="de">Немецкий</option>
+                <option value="fr">Французский</option>
+                <option value="es">Испанский</option>
+                <!-- Можно добавить другие языки -->
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="task">Задача:</label>
+            <select id="task">
+                <option value="transcribe" selected>Транскрипция</option>
+                <option value="translate">Перевод на английский</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="audio">Выберите аудиофайл:</label>
+            <input type="file" id="audio" accept="audio/*">
+            <div class="info">Поддерживаемые форматы: mp3, wav, m4a, ogg и другие</div>
+        </div>
+        
+        <button id="submit">Распознать речь</button>
+    </div>
+    
+    <div id="processing" class="card hidden">
+        <h3>Обработка файла...</h3>
+        <div class="loader" style="display: block;"></div>
+        <div id="status">Загрузка файла...</div>
+    </div>
+    
+    <div id="results" class="card hidden">
+        <h3>Результаты распознавания</h3>
+        <div class="info">Язык: <span id="detected-language">-</span> | Время обработки: <span id="processing-time">-</span></div>
+        
+        <h4>Текст:</h4>
+        <div id="transcription" class="result"></div>
+        
+        <h4>Сегменты:</h4>
+        <div id="segments" class="segments"></div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const submitBtn = document.getElementById('submit');
+            const audioInput = document.getElementById('audio');
+            const modelSelect = document.getElementById('model');
+            const languageSelect = document.getElementById('language');
+            const taskSelect = document.getElementById('task');
+            const processingDiv = document.getElementById('processing');
+            const resultsDiv = document.getElementById('results');
+            const transcriptionDiv = document.getElementById('transcription');
+            const segmentsDiv = document.getElementById('segments');
+            const statusDiv = document.getElementById('status');
+            const detectedLanguageSpan = document.getElementById('detected-language');
+            const processingTimeSpan = document.getElementById('processing-time');
+            
+            // Загрузка списка моделей с сервера
+            fetch('/api/models')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Доступные модели:', data);
+                })
+                .catch(error => {
+                    console.error('Ошибка при загрузке моделей:', error);
+                });
+            
+            submitBtn.addEventListener('click', function() {
+                const file = audioInput.files[0];
+                if (!file) {
+                    alert('Пожалуйста, выберите аудиофайл');
+                    return;
+                }
+                
+                // Показываем экран обработки
+                processingDiv.classList.remove('hidden');
+                resultsDiv.classList.add('hidden');
+                submitBtn.disabled = true;
+                
+                // Подготавливаем данные для отправки
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('model', modelSelect.value);
+                if (languageSelect.value) {
+                    formData.append('language', languageSelect.value);
+                }
+                formData.append('task', taskSelect.value);
+                
+                // Отправляем запрос
+                statusDiv.textContent = 'Отправка файла на сервер...';
+                
+                fetch('/api/transcribe', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Ошибка при отправке запроса: ' + response.status);
+                    }
+                    statusDiv.textContent = 'Обработка аудио...';
+                    return response.json();
+                })
+                .then(data => {
+                    // Обрабатываем результат
+                    console.log('Результат распознавания:', data);
+                    
+                    // Отображаем результаты
+                    processingDiv.classList.add('hidden');
+                    resultsDiv.classList.remove('hidden');
+                    
+                    // Текст
+                    transcriptionDiv.textContent = data.text || 'Текст не распознан';
+                    
+                    // Информация
+                    detectedLanguageSpan.textContent = data.language || '-';
+                    processingTimeSpan.textContent = data.processing_time ? 
+                        `${data.processing_time.toFixed(2)} сек.` : '-';
+                    
+                    // Сегменты
+                    segmentsDiv.innerHTML = '';
+                    if (data.segments && data.segments.length > 0) {
+                        data.segments.forEach(segment => {
+                            const div = document.createElement('div');
+                            div.className = 'segment-item';
+                            
+                            const timeSpan = document.createElement('span');
+                            timeSpan.className = 'time';
+                            timeSpan.textContent = `[${formatTime(segment.start)} → ${formatTime(segment.end)}]`;
+                            
+                            div.appendChild(timeSpan);
+                            div.appendChild(document.createTextNode(segment.text));
+                            
+                            segmentsDiv.appendChild(div);
+                        });
+                    } else {
+                        segmentsDiv.textContent = 'Нет информации о сегментах';
+                    }
+                })
+                .catch(error => {
+                    console.error('Ошибка:', error);
+                    alert('Произошла ошибка при распознавании: ' + error.message);
+                    processingDiv.classList.add('hidden');
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                });
+            });
+            
+            // Форматирование времени в формат MM:SS.ms
+            function formatTime(seconds) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                const ms = Math.floor((seconds % 1) * 100);
+                return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+            }
+        });
+    </script>
+</body>
+</html> 
