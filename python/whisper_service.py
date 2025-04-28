@@ -11,8 +11,7 @@ import base64
 import signal
 import warnings
 import queue
-import concurrent.futures
-from pathlib import Path
+import torch
 
 # Подавляем предупреждение о FP16
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
@@ -33,14 +32,44 @@ if int(python_version[0]) == 3 and int(python_version[1]) >= 12:
     logger.warning("Рекомендуется использовать Python версии 3.8-3.11.")
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
 except ImportError as e:
-    logger.error(f"Ошибка импорта библиотеки whisper: {e}")
+    logger.error(f"Ошибка импорта библиотеки faster-whisper: {e}")
     logger.error("\nПопробуйте выполнить следующие команды для устранения проблемы:")
     logger.error("pip install --upgrade pip")
     logger.error("pip install setuptools wheel")
-    logger.error("pip install git+https://github.com/openai/whisper.git")
+    logger.error("pip install faster-whisper")
     sys.exit(1)
+
+# Определяем доступное устройство и версию CUDA
+def get_device():
+    try:
+        if torch.cuda.is_available():
+            cuda_version = torch.version.cuda
+            logger.info(f"Обнаружена CUDA версии {cuda_version}")
+            
+            # Проверяем версию CUDA
+            if cuda_version.startswith('11'):
+                logger.info("Используем CUDA 11.x")
+                # Устанавливаем переменную окружения для использования CUDA 11
+                os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+                os.environ['CUDA_HOME'] = os.environ.get('CUDA_PATH', '')
+                return "cuda"
+            else:
+                logger.warning(f"Неподдерживаемая версия CUDA: {cuda_version}")
+                logger.warning("Переключаемся на CPU")
+                return "cpu"
+        return "cpu"
+    except Exception as e:
+        logger.warning(f"Ошибка при инициализации CUDA: {e}")
+        logger.warning("Переключаемся на CPU")
+        return "cpu"
+
+DEVICE = get_device()
+COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
+
+logger.info(f"Используется устройство: {DEVICE}")
+logger.info(f"Тип вычислений: {COMPUTE_TYPE}")
 
 # Константы для сетевого взаимодействия
 DEFAULT_HOST = '127.0.0.1'
@@ -63,32 +92,107 @@ def get_model(model_name="base"):
     with model_lock:
         if model_name not in models:
             logger.info(f"Загрузка модели '{model_name}'...")
-            models[model_name] = whisper.load_model(model_name)
+            try:
+                # Устанавливаем переменные окружения для CUDA
+                if DEVICE == "cuda":
+                    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+                    os.environ['CUDA_HOME'] = os.environ.get('CUDA_PATH', '')
+                
+                models[model_name] = WhisperModel(
+                    model_name,
+                    device=DEVICE,
+                    compute_type=COMPUTE_TYPE,
+                    download_root="models",  # Кэшируем модели в локальной папке
+                    cpu_threads=4,  # Оптимизируем использование CPU
+                    num_workers=1  # Уменьшаем количество рабочих потоков
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке модели: {e}")
+                logger.info("Пробуем загрузить модель на CPU...")
+                models[model_name] = WhisperModel(
+                    model_name,
+                    device="cpu",
+                    compute_type="int8",
+                    download_root="models",
+                    cpu_threads=4
+                )
         return models[model_name]
 
-def transcribe_audio(audio_path, model_name="base", language=None, task="transcribe"):
-    """Распознавание речи в аудиофайле"""
+def transcribe_audio(audio_path, model_name="base", language=None, task="transcribe", vad_filter=True):
+    """Распознавание речи в аудиофайле
+    
+    Args:
+        audio_path (str): Путь к аудиофайлу
+        model_name (str): Название модели (по умолчанию "base")
+        language (str, optional): Язык для распознавания
+        task (str, optional): Тип задачи ("transcribe" или "translate")
+        vad_filter (bool, optional): Использовать VAD фильтр для удаления участков без речи
+    """
     try:
         # Загрузка модели
         model = get_model(model_name)
         
         # Опции распознавания
-        options = {"task": task}
+        options = {
+            "task": task,
+            "vad_filter": vad_filter,
+            "vad_parameters": {
+                "min_silence_duration_ms": 1000,  # Увеличиваем минимальную длительность тишины
+                "speech_pad_ms": 200,  # Уменьшаем буфер для более точного определения речи
+                "threshold": 0.5,  # Более строгий порог для определения речи
+            },
+            "beam_size": 5,  # Оптимальный размер луча для баланса скорости и точности
+            "condition_on_previous_text": True,  # Учитываем предыдущий контекст
+            "initial_prompt": "Это аудио на русском языке." if language == "ru" else None
+        }
         if language:
             options["language"] = language
         
         # Распознавание
-        logger.info(f"Начало распознавания файла {audio_path}")
+        logger.info(f"Начало распознавания файла {audio_path} с VAD фильтром")
         start_time = time.time()
-        result = model.transcribe(audio_path, **options)
+        
+        try:
+            # Устанавливаем переменные окружения для CUDA перед распознаванием
+            if DEVICE == "cuda":
+                os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+                os.environ['CUDA_HOME'] = os.environ.get('CUDA_PATH', '')
+            
+            segments, info = model.transcribe(audio_path, **options)
+        except Exception as e:
+            logger.error(f"Ошибка при распознавании на {DEVICE}: {e}")
+            logger.info("Пробуем распознавание на CPU...")
+            # Создаем новую модель для CPU
+            cpu_model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=4
+            )
+            segments, info = cpu_model.transcribe(audio_path, **options)
+        
+        # Собираем текст и сегменты
+        text = ""
+        segments_list = []
+        for segment in segments:
+            text += segment.text + " "
+            segments_list.append({
+                "text": segment.text,
+                "start": segment.start,
+                "end": segment.end
+            })
+        
         elapsed_time = time.time() - start_time
         
         # Формирование ответа
         response = {
-            "text": result["text"],
-            "language": result["language"],
-            "segments": result["segments"],
-            "processing_time": elapsed_time
+            "text": text.strip(),
+            "language": info.language,
+            "segments": segments_list,
+            "processing_time": elapsed_time,
+            "vad_filter": vad_filter,
+            "device": DEVICE,
+            "compute_type": COMPUTE_TYPE
         }
         
         logger.info(f"Распознавание завершено за {elapsed_time:.2f} сек")
@@ -111,7 +215,8 @@ def worker_task():
                     audio_path,
                     model_name=options.get('model', 'base'),
                     language=options.get('language'),
-                    task=options.get('task', 'transcribe')
+                    task=options.get('task', 'transcribe'),
+                    vad_filter=options.get('vad_filter', True)
                 )
                 
                 # Сохраняем результат
@@ -211,6 +316,7 @@ def handle_client(client_socket):
                                             'model': message.get('model', 'base'),
                                             'language': message.get('language'),
                                             'task': message.get('task', 'transcribe'),
+                                            'vad_filter': message.get('vad_filter', True),
                                             'temp_file': False
                                         }
                                     ))
@@ -226,7 +332,8 @@ def handle_client(client_socket):
                                         audio_path,
                                         model_name=message.get('model', 'base'),
                                         language=message.get('language'),
-                                        task=message.get('task', 'transcribe')
+                                        task=message.get('task', 'transcribe'),
+                                        vad_filter=message.get('vad_filter', True)
                                     )
                         else:
                             # Сохраняем данные во временный файл
@@ -252,6 +359,7 @@ def handle_client(client_socket):
                                             'model': message.get('model', 'base'),
                                             'language': message.get('language'),
                                             'task': message.get('task', 'transcribe'),
+                                            'vad_filter': message.get('vad_filter', True),
                                             'temp_file': True
                                         }
                                     ))
@@ -267,7 +375,8 @@ def handle_client(client_socket):
                                         audio_path,
                                         model_name=message.get('model', 'base'),
                                         language=message.get('language'),
-                                        task=message.get('task', 'transcribe')
+                                        task=message.get('task', 'transcribe'),
+                                        vad_filter=message.get('vad_filter', True)
                                     )
                                     
                                     # Удаляем временные файлы в синхронном режиме

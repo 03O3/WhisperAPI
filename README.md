@@ -27,8 +27,39 @@
 1. Python 3.8-3.11
 2. Go 1.18+
 3. FFmpeg
+4. CUDA Toolkit 11.8
+5. PyTorch с поддержкой CUDA
 
 ### Python сервис
+
+1. Установите Python 3.8-3.11 (рекомендуется):
+   - [Python 3.11](https://www.python.org/downloads/release/python-3110/)
+
+2. Установите CUDA Toolkit 11.8:
+   - [CUDA Toolkit 11.8](https://developer.nvidia.com/cuda-11-8-0-download-archive)
+   - При установке выберите опцию "Custom" и убедитесь, что выбраны компоненты:
+     - CUDA Runtime
+     - CUDA Development
+     - cuBLAS
+     - cuDNN
+
+3. Установите PyTorch с поддержкой CUDA:
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+4. Установите необходимые библиотеки:
+```bash
+pip install -r requirements.txt
+```
+
+5. Установите библиотеки CUDA:
+   - Скачайте библиотеки CUDA 11.8 из [репозитория](https://github.com/Purfview/whisper-standalone-win/releases/tag/libs)
+   - Распакуйте архив `CUDA11_v4`
+   - Скопируйте файлы в папку `C:\Windows\System32\`:
+     - `cublas64_11.dll`
+     - `cudnn64_8.dll`
+     - и другие файлы из архива
 
 ```bash
 cd python
@@ -116,4 +147,15 @@ WHISPER_HOST=127.0.0.1 WHISPER_PORT=9000 SERVER_PORT=8080 go run main.go whisper
 
 ```bash
 pip install git+https://github.com/openai/whisper.git
-``` 
+```
+
+## Оптимизация
+
+Для лучшей производительности:
+1. Используйте GPU, если он доступен
+2. Выберите подходящую модель в зависимости от требований к точности и скорости
+3. Настройте параметры VAD фильтра под ваши нужды
+
+## Лицензия
+
+MIT 
